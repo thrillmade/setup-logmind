@@ -25,7 +25,7 @@ jobs:
     if: contains(github.ref_name, '.')
     steps:
       - name: Wait for test-action.yml on this SHA
-        uses: lewagon/wait-on-check-action@v1.3.4
+        uses: lewagon/wait-on-check-action@v1.7.0
         with:
           ref: ${{ github.sha }}
           check-name: default (latest) - ubuntu-latest
@@ -66,7 +66,7 @@ jobs:
     needs: verify-tests-passed
     if: contains(github.ref_name, '.')
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -103,7 +103,7 @@ jobs:
     needs: verify-tests-passed
     if: contains(github.ref_name, '.')
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Create release
         env:
