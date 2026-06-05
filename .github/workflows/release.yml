@@ -24,20 +24,13 @@ jobs:
     # and re-fires this trigger — we don't want it to loop on itself.
     if: contains(github.ref_name, '.')
     steps:
-      - name: Wait for test-action.yml on this SHA
-        uses: lewagon/wait-on-check-action@v1.7.0
-        with:
-          ref: ${{ github.sha }}
-          check-name: default (latest) - ubuntu-latest
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-          wait-interval: 15
-          allowed-conclusions: success
-
-      - name: Confirm all matrix legs succeeded
+      - name: Wait for all test-action matrix legs on this SHA
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          # Required check names — must match the job-name strings
+          # rendered by .github/workflows/test-action.yml.
           REQUIRED_CHECKS=(
             "default (latest) - ubuntu-latest"
             "default (latest) - macos-latest"
@@ -49,15 +42,44 @@ jobs:
             "major float v1 - macos-latest"
             "major float v1 - windows-latest"
           )
-          for check in "${REQUIRED_CHECKS[@]}"; do
-            conclusion="$(gh api \
-              "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs?check_name=${check// /%20}" \
-              --jq '.check_runs[0].conclusion' || true)"
-            if [[ "${conclusion}" != "success" ]]; then
-              echo "::error::required check '${check}' is '${conclusion}' (need 'success')"
+
+          # Poll every 15s up to 30 min. Each check must reach
+          # `completed` with conclusion `success`. Any other terminal
+          # conclusion (failure/cancelled/timed_out/skipped/...) hard-
+          # fails the release. This replaces lewagon/wait-on-check-
+          # action — the third-party allowlist on this org doesn't
+          # whitelist that action, and gh CLI does the same job in
+          # ~30 lines of bash.
+          DEADLINE=$(( $(date +%s) + 30*60 ))
+          while :; do
+            all_done=true
+            for check in "${REQUIRED_CHECKS[@]}"; do
+              encoded="${check// /%20}"
+              row="$(gh api \
+                "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs?check_name=${encoded}" \
+                --jq '.check_runs[0] | "\(.status)|\(.conclusion // "")"' || echo "missing|")"
+              status="${row%%|*}"
+              conclusion="${row##*|}"
+              if [[ "${status}" != "completed" ]]; then
+                all_done=false
+                echo "waiting: ${check} (status=${status})"
+                continue
+              fi
+              if [[ "${conclusion}" != "success" ]]; then
+                echo "::error title=release::required check '${check}' concluded '${conclusion}'"
+                exit 1
+              fi
+              echo "ok: ${check}"
+            done
+            if "${all_done}"; then
+              echo "::notice title=release::all ${#REQUIRED_CHECKS[@]} required checks passed"
+              break
+            fi
+            if (( $(date +%s) > DEADLINE )); then
+              echo "::error title=release::timed out waiting for required checks"
               exit 1
             fi
-            echo "ok: ${check}"
+            sleep 15
           done
 
   update-major-float:
