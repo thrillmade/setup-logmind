@@ -27,6 +27,8 @@ jobs:
 
       - id: setup
         uses: ./
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Verify logmind on PATH
         shell: bash
@@ -73,6 +75,7 @@ jobs:
         uses: ./
         with:
           version: v1.0.1
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Verify resolved version matches input
         shell: bash
@@ -100,6 +103,7 @@ jobs:
         uses: ./
         with:
           version: v1
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Verify v1 resolves to a v1.x tag
         shell: bash

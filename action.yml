@@ -21,11 +21,13 @@ inputs:
     default: ""
   token:
     description: |
-      GitHub token used for release-lookup API calls. Default is
-      `${{ github.token }}`. Pass a PAT only if you need cross-repo
-      rate-limit headroom.
+      GitHub token used for release-lookup API calls. If unset, falls
+      back to the runner's `GITHUB_TOKEN` env (which Actions sets
+      automatically). Pass a PAT only if you need cross-repo
+      rate-limit headroom. Composite actions can't default this to
+      `github.token` directly — that's a GitHub Actions limitation.
     required: false
-    default: ${{ github.token }}
+    default: ""
 
 outputs:
   version:
@@ -40,12 +42,19 @@ runs:
       env:
         INPUT_VERSION: ${{ inputs.version }}
         INPUT_PREFIX: ${{ inputs.prefix }}
-        GH_TOKEN: ${{ inputs.token }}
+        INPUT_TOKEN: ${{ inputs.token }}
       run: |
         set -euo pipefail
 
         PREFIX="${INPUT_PREFIX:-${RUNNER_TEMP}/logmind}"
         REQUESTED="${INPUT_VERSION:-latest}"
+
+        # gh CLI picks up its token from GH_TOKEN. Prefer the explicit
+        # input; fall back to GITHUB_TOKEN that GitHub Actions sets
+        # for every workflow run. Composite actions can't default
+        # `inputs.token` to `${{ github.token }}` (template validator
+        # rejects it), so we do the fallback in the step.
+        export GH_TOKEN="${INPUT_TOKEN:-${GITHUB_TOKEN:-}}"
 
         # ------------------------------------------------------------------
         # Resolve version
