@@ -1,0 +1,13 @@
+version: 2
+updates:
+  # Bump any third-party actions we use in our own CI workflows.
+  # This action itself has no runtime npm/Go/etc. deps (it's a pure
+  # composite action), so github-actions is the only ecosystem.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      ci-actions:
+        patterns:
+          - "*"

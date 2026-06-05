@@ -1,0 +1,140 @@
+name: Setup logmind
+description: Install the logmind CLI on a GitHub Actions runner.
+author: thrillmade
+branding:
+  icon: book-open
+  color: purple
+
+inputs:
+  version:
+    description: |
+      logmind version to install. Accepts `latest`, an exact tag
+      (e.g. `v1.0.1`), or a major float (e.g. `v1`) that resolves
+      to the newest matching tag.
+    required: false
+    default: latest
+  prefix:
+    description: |
+      Install prefix. The binary lands at `<prefix>/bin/logmind`
+      and `<prefix>/bin` is appended to `$GITHUB_PATH`.
+    required: false
+    default: ""
+  token:
+    description: |
+      GitHub token used for release-lookup API calls. Default is
+      `${{ github.token }}`. Pass a PAT only if you need cross-repo
+      rate-limit headroom.
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  version:
+    description: The resolved logmind version actually installed (e.g. `v1.0.1`).
+    value: ${{ steps.install.outputs.version }}
+
+runs:
+  using: composite
+  steps:
+    - id: install
+      shell: bash
+      env:
+        INPUT_VERSION: ${{ inputs.version }}
+        INPUT_PREFIX: ${{ inputs.prefix }}
+        GH_TOKEN: ${{ inputs.token }}
+      run: |
+        set -euo pipefail
+
+        PREFIX="${INPUT_PREFIX:-${RUNNER_TEMP}/logmind}"
+        REQUESTED="${INPUT_VERSION:-latest}"
+
+        # ------------------------------------------------------------------
+        # Resolve version
+        #   latest        -> /releases/latest .tag_name
+        #   v<MAJOR>      -> newest tag matching v<MAJOR>.*
+        #   v<X>.<Y>.<Z>  -> verbatim
+        # ------------------------------------------------------------------
+        resolve_version() {
+          local req="$1"
+
+          # Exact tag (vMAJOR.MINOR.PATCH, optionally with -prerelease)
+          if [[ "${req}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+            printf '%s' "${req}"
+            return
+          fi
+
+          if [[ "${req}" == "latest" ]]; then
+            gh api repos/thrillmade/logmind/releases/latest --jq .tag_name
+            return
+          fi
+
+          # Major float vN — find newest release tag matching ^vN\..*
+          if [[ "${req}" =~ ^v([0-9]+)$ ]]; then
+            local major="${BASH_REMATCH[1]}"
+            gh api -X GET repos/thrillmade/logmind/releases \
+              -F per_page=100 \
+              --jq "[.[] | select(.prerelease|not) | .tag_name | select(test(\"^v${major}\\\\.\"))][0]"
+            return
+          fi
+
+          echo "::error title=setup-logmind::unrecognized version input '${req}' — expected 'latest', 'v<MAJOR>', or 'v<MAJOR>.<MINOR>.<PATCH>'" >&2
+          exit 1
+        }
+
+        RESOLVED="$(resolve_version "${REQUESTED}")"
+        if [[ -z "${RESOLVED}" || "${RESOLVED}" == "null" ]]; then
+          echo "::error title=setup-logmind::could not resolve version '${REQUESTED}'" >&2
+          exit 1
+        fi
+
+        # ------------------------------------------------------------------
+        # Install — branch by runner OS.
+        #   Linux / macOS: pipe the bash installer.
+        #   Windows:       download the zip + verify SHA256, then unpack.
+        # ------------------------------------------------------------------
+        case "${RUNNER_OS}" in
+          Linux|macOS)
+            curl -fsSL "https://raw.githubusercontent.com/thrillmade/logmind/${RESOLVED}/installer/install.sh" \
+              | bash -s -- --prefix="${PREFIX}" --version="${RESOLVED}"
+            BIN_DIR="${PREFIX}/bin"
+            BIN_PATH="${BIN_DIR}/logmind"
+            ;;
+          Windows)
+            BARE="${RESOLVED#v}"
+            case "${RUNNER_ARCH}" in
+              X64) ARCH="x86_64" ;;
+              ARM64) ARCH="arm64" ;;
+              *) echo "::error title=setup-logmind::unsupported Windows arch ${RUNNER_ARCH}" >&2; exit 1 ;;
+            esac
+            ARCHIVE="logmind_${BARE}_windows_${ARCH}.zip"
+            URL_BASE="https://github.com/thrillmade/logmind/releases/download/${RESOLVED}"
+            TMP="$(mktemp -d)"
+            curl -fsSL "${URL_BASE}/${ARCHIVE}" -o "${TMP}/${ARCHIVE}"
+            curl -fsSL "${URL_BASE}/SHA256SUMS" -o "${TMP}/SHA256SUMS"
+            EXPECTED="$(grep "  ${ARCHIVE}\$" "${TMP}/SHA256SUMS" | awk '{print $1}')"
+            if [[ -z "${EXPECTED}" ]]; then
+              echo "::error title=setup-logmind::no checksum line for ${ARCHIVE} in SHA256SUMS" >&2
+              exit 1
+            fi
+            ACTUAL="$(sha256sum "${TMP}/${ARCHIVE}" | awk '{print $1}')"
+            if [[ "${EXPECTED}" != "${ACTUAL}" ]]; then
+              echo "::error title=setup-logmind::checksum mismatch for ${ARCHIVE}" >&2
+              exit 1
+            fi
+            BIN_DIR="${PREFIX}/bin"
+            mkdir -p "${BIN_DIR}"
+            unzip -q -o "${TMP}/${ARCHIVE}" -d "${BIN_DIR}"
+            BIN_PATH="${BIN_DIR}/logmind.exe"
+            ;;
+          *)
+            echo "::error title=setup-logmind::unsupported RUNNER_OS '${RUNNER_OS}'" >&2
+            exit 1
+            ;;
+        esac
+
+        # ------------------------------------------------------------------
+        # PATH + verification + output
+        # ------------------------------------------------------------------
+        echo "${BIN_DIR}" >> "${GITHUB_PATH}"
+        echo "::notice title=logmind::Installed ${RESOLVED} to ${BIN_DIR}"
+        "${BIN_PATH}" --version
+        echo "version=${RESOLVED}" >> "${GITHUB_OUTPUT}"
