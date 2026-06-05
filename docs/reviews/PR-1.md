@@ -1,7 +1,7 @@
 # clud-bug review — PR #1
 <!-- protocol-version: 0.1.0 -->
 <!-- written-by: clud-bug[bot] -->
-<!-- review-sha: 3bd089351e7b0287cfcab7d2317aa8a57d1da709 -->
+<!-- review-sha: 583a78ad2541effbe04fa5076ff81daf569db5cc -->
 
 **Summary:** 0 critical · 0 minor · 0 preexisting · 0 resolved-from-prior · 0 still-open
 
