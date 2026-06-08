@@ -25,10 +25,17 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      # NOTE: deliberately no `token:` here. v1.0.1 dropped the `gh
+      # api` dependency in favor of unauthenticated `curl + jq`
+      # against the public logmind release endpoint. This regression
+      # test guards against re-introducing that bug: if any future
+      # change makes the action need `GH_TOKEN`, this matrix leg
+      # fails with `gh: To use GitHub CLI in a GitHub Actions
+      # workflow, set GH_TOKEN`. The explicit-tag + major-float
+      # jobs below still pass a token so we exercise the
+      # authenticated path too.
       - id: setup
         uses: ./
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Verify logmind on PATH
         shell: bash
@@ -71,6 +78,10 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      # Explicit tag input skips the API-lookup path entirely (the
+      # input is used verbatim). Pass a token here only to exercise
+      # the `Authorization: Bearer` plumbing — it should be a no-op
+      # but we want to know if it ever starts failing.
       - id: setup
         uses: ./
         with:
@@ -99,11 +110,15 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      # NOTE: deliberately no `token:` here either. Major-float
+      # resolution hits `/releases?per_page=100` — the second of the
+      # two API paths that broke with `gh api` in v1.0.0. This leg
+      # proves the unauthenticated curl path works for the more
+      # complex query too.
       - id: setup
         uses: ./
         with:
           version: v1
-          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Verify v1 resolves to a v1.x tag
         shell: bash
