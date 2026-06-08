@@ -21,11 +21,14 @@ inputs:
     default: ""
   token:
     description: |
-      GitHub token used for release-lookup API calls. If unset, falls
-      back to the runner's `GITHUB_TOKEN` env (which Actions sets
-      automatically). Pass a PAT only if you need cross-repo
-      rate-limit headroom. Composite actions can't default this to
-      `github.token` directly — that's a GitHub Actions limitation.
+      GitHub token used for release-lookup API calls. logmind is a
+      public repo, so unauthenticated `curl` against the GitHub API
+      works fine (60 req/hour per IP, well above CI traffic).
+      Only pass a token if you want cross-repo rate-limit headroom or
+      if logmind ever becomes private. Composite actions can't
+      default this to `github.token` directly — that's a GitHub
+      Actions limitation, but it doesn't matter here because the
+      action no longer requires auth.
     required: false
     default: ""
 
@@ -49,19 +52,40 @@ runs:
         PREFIX="${INPUT_PREFIX:-${RUNNER_TEMP}/logmind}"
         REQUESTED="${INPUT_VERSION:-latest}"
 
-        # gh CLI picks up its token from GH_TOKEN. Prefer the explicit
-        # input; fall back to GITHUB_TOKEN that GitHub Actions sets
-        # for every workflow run. Composite actions can't default
-        # `inputs.token` to `${{ github.token }}` (template validator
-        # rejects it), so we do the fallback in the step.
-        export GH_TOKEN="${INPUT_TOKEN:-${GITHUB_TOKEN:-}}"
-
         # ------------------------------------------------------------------
         # Resolve version
         #   latest        -> /releases/latest .tag_name
         #   v<MAJOR>      -> newest tag matching v<MAJOR>.*
         #   v<X>.<Y>.<Z>  -> verbatim
+        #
+        # logmind is a PUBLIC repo. Anonymous `curl` against the GitHub
+        # API works (60 req/hour per runner IP, well above CI volume).
+        # We deliberately do NOT depend on `gh` here: composite actions
+        # don't get `GH_TOKEN` auto-populated, only the calling workflow
+        # does — so any consumer that didn't explicitly pass
+        # `with: token: ${{ secrets.GITHUB_TOKEN }}` or
+        # `env: GH_TOKEN: ${{ github.token }}` would hit
+        # `gh: To use GitHub CLI in a GitHub Actions workflow, set
+        # GH_TOKEN`. Using `curl + jq` makes the action work in every
+        # public-repo consumer with zero auth setup.
+        #
+        # If `token` is provided (private-repo case or rate-limit
+        # headroom), we forward it via `Authorization: Bearer`.
         # ------------------------------------------------------------------
+        auth_header_args=()
+        if [[ -n "${INPUT_TOKEN:-}" ]]; then
+          auth_header_args=(-H "Authorization: Bearer ${INPUT_TOKEN}")
+        fi
+
+        api_get() {
+          # $1 = path (e.g. /repos/thrillmade/logmind/releases/latest)
+          curl -fsSL \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "${auth_header_args[@]}" \
+            "https://api.github.com$1"
+        }
+
         resolve_version() {
           local req="$1"
 
@@ -72,16 +96,16 @@ runs:
           fi
 
           if [[ "${req}" == "latest" ]]; then
-            gh api repos/thrillmade/logmind/releases/latest --jq .tag_name
+            api_get "/repos/thrillmade/logmind/releases/latest" | jq -r '.tag_name'
             return
           fi
 
           # Major float vN — find newest release tag matching ^vN\..*
           if [[ "${req}" =~ ^v([0-9]+)$ ]]; then
             local major="${BASH_REMATCH[1]}"
-            gh api -X GET repos/thrillmade/logmind/releases \
-              -F per_page=100 \
-              --jq "[.[] | select(.prerelease|not) | .tag_name | select(test(\"^v${major}\\\\.\"))][0]"
+            api_get "/repos/thrillmade/logmind/releases?per_page=100" \
+              | jq -r --arg major "${major}" \
+                  '[.[] | select(.prerelease | not) | .tag_name | select(test("^v" + $major + "\\."))] | .[0] // empty'
             return
           fi
 

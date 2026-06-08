@@ -17,7 +17,7 @@ ship.
 ```yaml
 steps:
   - uses: actions/checkout@v4
-  - uses: thrillmade/setup-logmind@v1.0.0
+  - uses: thrillmade/setup-logmind@v1.0.1
   - run: logmind check-links
 ```
 
@@ -25,7 +25,7 @@ By default this installs the **latest** logmind release. Pin the CLI version
 too if you want fully reproducible CI:
 
 ```yaml
-- uses: thrillmade/setup-logmind@v1.0.0
+- uses: thrillmade/setup-logmind@v1.0.1
   with:
     version: v1.0.1
 ```
@@ -58,7 +58,7 @@ workflow files an audit trail of what actually ran.
 | --------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
 | `version` | `latest`                  | logmind version to install. Accepts `latest`, an exact tag (`v1.0.1`), or a major float (`v1`) that resolves to the newest matching. |
 | `prefix`  | `${RUNNER_TEMP}/logmind`  | Install prefix. The binary lands at `<prefix>/bin/logmind` and `<prefix>/bin` is appended to `$GITHUB_PATH`.                         |
-| `token`   | `${{ github.token }}`     | GitHub token used for release-lookup API calls. Override only if you need cross-repo rate-limit headroom.                            |
+| `token`   | _(none)_                  | Optional. GitHub token used for release-lookup API calls. Defaults to no auth — logmind is a public repo and anonymous GitHub API requests work fine (60 req/hour per runner IP is well above CI volume). Pass a token only if you need cross-repo rate-limit headroom. |
 
 ## Outputs
 
@@ -70,7 +70,7 @@ Use it downstream like:
 
 ```yaml
 - id: lm
-  uses: thrillmade/setup-logmind@v1.0.0
+  uses: thrillmade/setup-logmind@v1.0.1
 - run: echo "Installed ${{ steps.lm.outputs.version }}"
 ```
 
@@ -97,12 +97,12 @@ For workflows that audit every action by SHA (we recommend this for any
 workflow with secrets):
 
 ```yaml
-- uses: thrillmade/setup-logmind@<full-sha-of-v1.0.0-tag>
+- uses: thrillmade/setup-logmind@<full-sha-of-v1.0.1-tag>
   with:
     version: v1.0.1
 ```
 
-Find the SHA at <https://github.com/thrillmade/setup-logmind/releases/tag/v1.0.0>
+Find the SHA at <https://github.com/thrillmade/setup-logmind/releases/tag/v1.0.1>
 and pin to it. Dependabot natively supports SHA-pinned actions — it'll open
 PRs with the SHA bumped and the comment annotated with the version.
 
@@ -132,6 +132,14 @@ in the same job can call `logmind` without qualifying the path.
 
 ## Releases
 
+- **`v1.0.1`** — fix: action no longer requires `GH_TOKEN`. v1.0.0 used `gh api`
+  for release lookup, which needed `GH_TOKEN` exposed by the caller. Composite
+  actions don't inherit `GH_TOKEN` automatically, so any consumer that didn't
+  explicitly pass `with: token:` or `env: GH_TOKEN:` failed with
+  `gh: To use GitHub CLI in a GitHub Actions workflow, set the GH_TOKEN
+  environment variable`. v1.0.1 switches the API lookups to `curl + jq` against
+  the public logmind release endpoint, removing the `gh` dependency entirely.
+  The `token` input is still accepted but no longer required.
 - **`v1.0.0`** — initial release.
 
 See [Releases](https://github.com/thrillmade/setup-logmind/releases) for the
