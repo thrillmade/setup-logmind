@@ -71,18 +71,31 @@ runs:
         # If `token` is provided (private-repo case or rate-limit
         # headroom), we forward it via `Authorization: Bearer`.
         # ------------------------------------------------------------------
-        auth_header_args=()
+        # NOTE: macOS GH-hosted runners still ship bash 3.2 (Apple
+        # license). Bash 3.2 under `set -u` errors on `"${arr[@]}"`
+        # when the array is empty (`unbound variable`). Avoid arrays
+        # entirely and build the auth-header curl flag conditionally
+        # inline.
         if [[ -n "${INPUT_TOKEN:-}" ]]; then
-          auth_header_args=(-H "Authorization: Bearer ${INPUT_TOKEN}")
+          AUTH_HEADER="Authorization: Bearer ${INPUT_TOKEN}"
+        else
+          AUTH_HEADER=""
         fi
 
         api_get() {
           # $1 = path (e.g. /repos/thrillmade/logmind/releases/latest)
-          curl -fsSL \
-            -H "Accept: application/vnd.github+json" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "${auth_header_args[@]}" \
-            "https://api.github.com$1"
+          if [[ -n "${AUTH_HEADER}" ]]; then
+            curl -fsSL \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              -H "${AUTH_HEADER}" \
+              "https://api.github.com$1"
+          else
+            curl -fsSL \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com$1"
+          fi
         }
 
         resolve_version() {
