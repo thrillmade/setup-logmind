@@ -62,9 +62,8 @@ runs:
         # API works (60 req/hour per runner IP, well above CI volume).
         # We deliberately do NOT depend on `gh` here: composite actions
         # don't get `GH_TOKEN` auto-populated, only the calling workflow
-        # does — so any consumer that didn't explicitly pass
-        # `with: token: ${{ secrets.GITHUB_TOKEN }}` or
-        # `env: GH_TOKEN: ${{ github.token }}` would hit
+        # does — so any consumer that didn't explicitly pass a `token`
+        # input or set `GH_TOKEN` in their step env would hit
         # `gh: To use GitHub CLI in a GitHub Actions workflow, set
         # GH_TOKEN`. Using `curl + jq` makes the action work in every
         # public-repo consumer with zero auth setup.
