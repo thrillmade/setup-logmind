@@ -88,7 +88,7 @@ jobs:
     needs: verify-tests-passed
     if: contains(github.ref_name, '.')
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -125,7 +125,7 @@ jobs:
     needs: verify-tests-passed
     if: contains(github.ref_name, '.')
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Create release
         env:

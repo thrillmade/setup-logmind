@@ -23,7 +23,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       # NOTE: deliberately no `token:` here. v1.0.1 dropped the `gh
       # api` dependency in favor of unauthenticated `curl + jq`
@@ -76,7 +76,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       # Explicit tag input skips the API-lookup path entirely (the
       # input is used verbatim). Pass a token here only to exercise
@@ -108,7 +108,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       # NOTE: deliberately no `token:` here either. Major-float
       # resolution hits `/releases?per_page=100` — the second of the
