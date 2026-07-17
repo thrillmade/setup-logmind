@@ -21,14 +21,20 @@ inputs:
     default: ""
   token:
     description: |
-      GitHub token used for release-lookup API calls. logmind is a
-      public repo, so unauthenticated `curl` against the GitHub API
-      works fine (60 req/hour per IP, well above CI traffic).
-      Only pass a token if you want cross-repo rate-limit headroom or
-      if logmind ever becomes private. Composite actions can't
-      default this to `github.token` directly — that's a GitHub
-      Actions limitation, but it doesn't matter here because the
-      action no longer requires auth.
+      GitHub token used for release-lookup API calls and downloads.
+      logmind is a public repo so this isn't strictly required, but
+      anonymous `curl` against api.github.com is capped at 60
+      requests/hour **per runner IP**, and GitHub-hosted runner IPs
+      are shared across many concurrent jobs org-wide — that budget
+      routinely gets exhausted by other traffic, producing an
+      intermittent `curl: (22) ... 403` here. Passing a token raises
+      the ceiling to 5000/hour and is the recommended default.
+      Composite actions can't default this input to `github.token`
+      directly — that's a GitHub Actions limitation — so pass it
+      explicitly: `with: token: <your workflow's github.token>`. See the README
+      for details. If left empty, the action also falls back to a
+      `GH_TOKEN` or `GITHUB_TOKEN` environment variable when the
+      calling job happens to export one.
     required: false
     default: ""
 
@@ -58,44 +64,167 @@ runs:
         #   v<MAJOR>      -> newest tag matching v<MAJOR>.*
         #   v<X>.<Y>.<Z>  -> verbatim
         #
-        # logmind is a PUBLIC repo. Anonymous `curl` against the GitHub
-        # API works (60 req/hour per runner IP, well above CI volume).
-        # We deliberately do NOT depend on `gh` here: composite actions
-        # don't get `GH_TOKEN` auto-populated, only the calling workflow
-        # does — so any consumer that didn't explicitly pass a `token`
-        # input or set `GH_TOKEN` in their step env would hit
-        # `gh: To use GitHub CLI in a GitHub Actions workflow, set
-        # GH_TOKEN`. Using `curl + jq` makes the action work in every
-        # public-repo consumer with zero auth setup.
+        # logmind is a PUBLIC repo, so unauthenticated `curl` against the
+        # GitHub API technically "works" — but anonymous requests are
+        # capped at 60/hour **per runner IP**, and GitHub-hosted runner
+        # IPs are shared across many concurrent jobs org-wide. That
+        # budget gets exhausted by unrelated traffic often enough to
+        # produce intermittent `curl: (22) ... 403` here (see
+        # thrillmade/setup-logmind#4, #5). We deliberately do NOT depend
+        # on `gh` here: composite actions don't get `GH_TOKEN`
+        # auto-populated, only the calling workflow does — so any
+        # consumer that didn't explicitly pass a `token` input or set
+        # `GH_TOKEN` in their step env would hit `gh: To use GitHub CLI
+        # in a GitHub Actions workflow, set GH_TOKEN`. Using `curl + jq`
+        # makes the action work in every public-repo consumer with zero
+        # auth setup, at the cost of that 60/hour anonymous ceiling.
         #
-        # If `token` is provided (private-repo case or rate-limit
-        # headroom), we forward it via `Authorization: Bearer`.
+        # Two mitigations for the rate limit, in order:
+        #   1. Forward `token` (or a `GH_TOKEN`/`GITHUB_TOKEN` env
+        #      fallback) via `Authorization: Bearer` on every API call
+        #      AND every asset download — see api_get()/download_retry()
+        #      below. Authenticated requests get 5000/hour instead of 60.
+        #      README recommends `with: token: <your workflow's github.token>`.
+        #   2. Retry with backoff on 403/429/5xx even when unauthenticated
+        #      or when the token's own budget is briefly exhausted.
         # ------------------------------------------------------------------
         # NOTE: macOS GH-hosted runners still ship bash 3.2 (Apple
         # license). Bash 3.2 under `set -u` errors on `"${arr[@]}"`
         # when the array is empty (`unbound variable`). Avoid arrays
-        # entirely and build the auth-header curl flag conditionally
-        # inline.
-        if [[ -n "${INPUT_TOKEN:-}" ]]; then
-          AUTH_HEADER="Authorization: Bearer ${INPUT_TOKEN}"
+        # entirely and build the auth-header curl flag / backoff delays
+        # conditionally inline.
+        TOKEN="${INPUT_TOKEN:-}"
+        if [[ -z "${TOKEN}" ]]; then
+          # Composite actions don't get an input default of
+          # `github.token` (not supported by the Actions
+          # metadata schema), so fall back to whatever the calling
+          # job's environment already exports. Many workflows set
+          # GH_TOKEN (for `gh` CLI steps elsewhere in the same job) or
+          # GITHUB_TOKEN at the job/workflow level — if either is
+          # present, use it rather than going fully anonymous.
+          TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
+        fi
+        if [[ -n "${TOKEN}" ]]; then
+          AUTH_HEADER="Authorization: Bearer ${TOKEN}"
         else
           AUTH_HEADER=""
         fi
 
+        # Sleep before retry attempt N (2nd/3rd/4th try): 2s, 5s, 10s.
+        # A case statement (not an array) to stay bash-3.2-safe, per the
+        # NOTE above.
+        backoff_sleep() {
+          case "$1" in
+            2) sleep 2 ;;
+            3) sleep 5 ;;
+            4) sleep 10 ;;
+          esac
+        }
+
+        # api_get PATH
+        #   GET https://api.github.com$PATH, with retry/backoff.
+        #   Prints the response body to stdout on success.
+        #
+        # Retries up to 3 times (4 attempts total) on HTTP 403 (primary
+        # rate limit), 429 (secondary rate limit), or 5xx, sleeping
+        # 2s/5s/10s between attempts. Does NOT retry HTTP 404 — that's a
+        # real "not found," not a transient failure. Deliberately does
+        # NOT pass `-f` to curl: `-f` suppresses the response body on
+        # HTTP-error responses, and we need the body (for the final
+        # error message) plus a clean, version-independent way to read
+        # the status code, so failure is detected by inspecting
+        # `%{http_code}` instead of curl's exit status. On final
+        # failure, returns exit code 22 to preserve the same "hard
+        # failure" signature `set -euo pipefail` produced before this
+        # change (matching the exit code the linked issues were filed
+        # against), so downstream log-scraping / muscle memory still
+        # recognizes it.
         api_get() {
-          # $1 = path (e.g. /repos/thrillmade/logmind/releases/latest)
-          if [[ -n "${AUTH_HEADER}" ]]; then
-            curl -fsSL \
-              -H "Accept: application/vnd.github+json" \
-              -H "X-GitHub-Api-Version: 2022-11-28" \
-              -H "${AUTH_HEADER}" \
-              "https://api.github.com$1"
-          else
-            curl -fsSL \
-              -H "Accept: application/vnd.github+json" \
-              -H "X-GitHub-Api-Version: 2022-11-28" \
-              "https://api.github.com$1"
-          fi
+          local path="$1"
+          local url="https://api.github.com${path}"
+          local tmp attempt http_code rc
+
+          tmp="$(mktemp)"
+          attempt=1
+          while :; do
+            rc=0
+            if [[ -n "${AUTH_HEADER}" ]]; then
+              http_code="$(curl -sSL -w '%{http_code}' -o "${tmp}" \
+                -H "Accept: application/vnd.github+json" \
+                -H "X-GitHub-Api-Version: 2022-11-28" \
+                -H "${AUTH_HEADER}" \
+                "${url}")" || rc=$?
+            else
+              http_code="$(curl -sSL -w '%{http_code}' -o "${tmp}" \
+                -H "Accept: application/vnd.github+json" \
+                -H "X-GitHub-Api-Version: 2022-11-28" \
+                "${url}")" || rc=$?
+            fi
+
+            if [[ "${rc}" -eq 0 && "${http_code}" =~ ^2[0-9][0-9]$ ]]; then
+              cat "${tmp}"
+              rm -f "${tmp}"
+              return 0
+            fi
+
+            if [[ "${http_code}" == "404" ]]; then
+              echo "::error title=setup-logmind::GET ${url} -> HTTP 404 (not retrying)" >&2
+              rm -f "${tmp}"
+              return 22
+            fi
+
+            if [[ "${attempt}" -ge 4 || ! "${http_code}" =~ ^(403|429|5[0-9][0-9])$ ]]; then
+              echo "::error title=setup-logmind::GET ${url} -> HTTP ${http_code:-unknown} (curl rc ${rc}) after ${attempt} attempt(s)" >&2
+              rm -f "${tmp}"
+              return 22
+            fi
+
+            attempt=$((attempt + 1))
+            echo "::warning title=setup-logmind::GET ${url} -> HTTP ${http_code}; retrying (attempt ${attempt}/4)" >&2
+            backoff_sleep "${attempt}"
+          done
+        }
+
+        # download_retry URL DEST
+        #   Download URL to DEST with the same retry/backoff policy as
+        #   api_get (403/429/5xx retried up to 3 times with 2s/5s/10s
+        #   backoff; 404 and other non-2xx fail immediately). Sends the
+        #   same Authorization header as api_get when a token is
+        #   available — GitHub honors it on raw.githubusercontent.com
+        #   and release-asset downloads too, and it's a no-op for public
+        #   assets otherwise.
+        download_retry() {
+          local url="$1"
+          local dest="$2"
+          local attempt=1
+          local http_code rc
+
+          while :; do
+            rc=0
+            if [[ -n "${AUTH_HEADER}" ]]; then
+              http_code="$(curl -sSL -w '%{http_code}' -o "${dest}" -H "${AUTH_HEADER}" "${url}")" || rc=$?
+            else
+              http_code="$(curl -sSL -w '%{http_code}' -o "${dest}" "${url}")" || rc=$?
+            fi
+
+            if [[ "${rc}" -eq 0 && "${http_code}" =~ ^2[0-9][0-9]$ ]]; then
+              return 0
+            fi
+
+            if [[ "${http_code}" == "404" ]]; then
+              echo "::error title=setup-logmind::download ${url} -> HTTP 404 (not retrying)" >&2
+              return 22
+            fi
+
+            if [[ "${attempt}" -ge 4 || ! "${http_code}" =~ ^(403|429|5[0-9][0-9])$ ]]; then
+              echo "::error title=setup-logmind::download ${url} -> HTTP ${http_code:-unknown} (curl rc ${rc}) after ${attempt} attempt(s)" >&2
+              return 22
+            fi
+
+            attempt=$((attempt + 1))
+            echo "::warning title=setup-logmind::download ${url} -> HTTP ${http_code}; retrying (attempt ${attempt}/4)" >&2
+            backoff_sleep "${attempt}"
+          done
         }
 
         resolve_version() {
@@ -133,13 +262,19 @@ runs:
 
         # ------------------------------------------------------------------
         # Install — branch by runner OS.
-        #   Linux / macOS: pipe the bash installer.
+        #   Linux / macOS: download the bash installer, then run it.
         #   Windows:       download the zip + verify SHA256, then unpack.
+        # Both legs download via download_retry() (retry/backoff + auth
+        # header, see above) rather than piping curl straight into bash —
+        # besides getting retries, this also avoids ever executing a
+        # partially-transferred script.
         # ------------------------------------------------------------------
         case "${RUNNER_OS}" in
           Linux|macOS)
-            curl -fsSL "https://raw.githubusercontent.com/thrillmade/logmind/${RESOLVED}/installer/install.sh" \
-              | bash -s -- --prefix="${PREFIX}" --version="${RESOLVED}"
+            INSTALL_SH="$(mktemp)"
+            download_retry "https://raw.githubusercontent.com/thrillmade/logmind/${RESOLVED}/installer/install.sh" "${INSTALL_SH}"
+            bash "${INSTALL_SH}" --prefix="${PREFIX}" --version="${RESOLVED}"
+            rm -f "${INSTALL_SH}"
             BIN_DIR="${PREFIX}/bin"
             BIN_PATH="${BIN_DIR}/logmind"
             ;;
@@ -153,8 +288,8 @@ runs:
             ARCHIVE="logmind_${BARE}_windows_${ARCH}.zip"
             URL_BASE="https://github.com/thrillmade/logmind/releases/download/${RESOLVED}"
             TMP="$(mktemp -d)"
-            curl -fsSL "${URL_BASE}/${ARCHIVE}" -o "${TMP}/${ARCHIVE}"
-            curl -fsSL "${URL_BASE}/SHA256SUMS" -o "${TMP}/SHA256SUMS"
+            download_retry "${URL_BASE}/${ARCHIVE}" "${TMP}/${ARCHIVE}"
+            download_retry "${URL_BASE}/SHA256SUMS" "${TMP}/SHA256SUMS"
             EXPECTED="$(grep "  ${ARCHIVE}\$" "${TMP}/SHA256SUMS" | awk '{print $1}')"
             if [[ -z "${EXPECTED}" ]]; then
               echo "::error title=setup-logmind::no checksum line for ${ARCHIVE} in SHA256SUMS" >&2

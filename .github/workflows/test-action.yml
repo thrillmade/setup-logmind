@@ -36,6 +36,8 @@ jobs:
       # authenticated path too.
       - id: setup
         uses: ./
+        with:
+          token: ${{ github.token }}
 
       - name: Verify logmind on PATH
         shell: bash
@@ -118,6 +120,7 @@ jobs:
       - id: setup
         uses: ./
         with:
+          token: ${{ github.token }}
           version: v1
 
       - name: Verify v1 resolves to a v1.x tag
