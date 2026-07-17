@@ -31,7 +31,7 @@ inputs:
       the ceiling to 5000/hour and is the recommended default.
       Composite actions can't default this input to `github.token`
       directly — that's a GitHub Actions limitation — so pass it
-      explicitly: `with: token: ${{ github.token }}`. See the README
+      explicitly: `with: token: <your workflow's github.token>`. See the README
       for details. If left empty, the action also falls back to a
       `GH_TOKEN` or `GITHUB_TOKEN` environment variable when the
       calling job happens to export one.
@@ -84,7 +84,7 @@ runs:
         #      fallback) via `Authorization: Bearer` on every API call
         #      AND every asset download — see api_get()/download_retry()
         #      below. Authenticated requests get 5000/hour instead of 60.
-        #      README recommends `with: token: ${{ github.token }}`.
+        #      README recommends `with: token: <your workflow's github.token>`.
         #   2. Retry with backoff on 403/429/5xx even when unauthenticated
         #      or when the token's own budget is briefly exhausted.
         # ------------------------------------------------------------------
@@ -96,7 +96,7 @@ runs:
         TOKEN="${INPUT_TOKEN:-}"
         if [[ -z "${TOKEN}" ]]; then
           # Composite actions don't get an input default of
-          # `${{ github.token }}` (not supported by the Actions
+          # `github.token` (not supported by the Actions
           # metadata schema), so fall back to whatever the calling
           # job's environment already exports. Many workflows set
           # GH_TOKEN (for `gh` CLI steps elsewhere in the same job) or
@@ -149,13 +149,13 @@ runs:
           while :; do
             rc=0
             if [[ -n "${AUTH_HEADER}" ]]; then
-              http_code="$(curl -sS -w '%{http_code}' -o "${tmp}" \
+              http_code="$(curl -sSL -w '%{http_code}' -o "${tmp}" \
                 -H "Accept: application/vnd.github+json" \
                 -H "X-GitHub-Api-Version: 2022-11-28" \
                 -H "${AUTH_HEADER}" \
                 "${url}")" || rc=$?
             else
-              http_code="$(curl -sS -w '%{http_code}' -o "${tmp}" \
+              http_code="$(curl -sSL -w '%{http_code}' -o "${tmp}" \
                 -H "Accept: application/vnd.github+json" \
                 -H "X-GitHub-Api-Version: 2022-11-28" \
                 "${url}")" || rc=$?
@@ -202,9 +202,9 @@ runs:
           while :; do
             rc=0
             if [[ -n "${AUTH_HEADER}" ]]; then
-              http_code="$(curl -sS -w '%{http_code}' -o "${dest}" -H "${AUTH_HEADER}" "${url}")" || rc=$?
+              http_code="$(curl -sSL -w '%{http_code}' -o "${dest}" -H "${AUTH_HEADER}" "${url}")" || rc=$?
             else
-              http_code="$(curl -sS -w '%{http_code}' -o "${dest}" "${url}")" || rc=$?
+              http_code="$(curl -sSL -w '%{http_code}' -o "${dest}" "${url}")" || rc=$?
             fi
 
             if [[ "${rc}" -eq 0 && "${http_code}" =~ ^2[0-9][0-9]$ ]]; then
