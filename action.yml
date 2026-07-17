@@ -149,13 +149,13 @@ runs:
           while :; do
             rc=0
             if [[ -n "${AUTH_HEADER}" ]]; then
-              http_code="$(curl -sS -w '%{http_code}' -o "${tmp}" \
+              http_code="$(curl -sSL -w '%{http_code}' -o "${tmp}" \
                 -H "Accept: application/vnd.github+json" \
                 -H "X-GitHub-Api-Version: 2022-11-28" \
                 -H "${AUTH_HEADER}" \
                 "${url}")" || rc=$?
             else
-              http_code="$(curl -sS -w '%{http_code}' -o "${tmp}" \
+              http_code="$(curl -sSL -w '%{http_code}' -o "${tmp}" \
                 -H "Accept: application/vnd.github+json" \
                 -H "X-GitHub-Api-Version: 2022-11-28" \
                 "${url}")" || rc=$?
