@@ -202,9 +202,9 @@ runs:
           while :; do
             rc=0
             if [[ -n "${AUTH_HEADER}" ]]; then
-              http_code="$(curl -sS -w '%{http_code}' -o "${dest}" -H "${AUTH_HEADER}" "${url}")" || rc=$?
+              http_code="$(curl -sSL -w '%{http_code}' -o "${dest}" -H "${AUTH_HEADER}" "${url}")" || rc=$?
             else
-              http_code="$(curl -sS -w '%{http_code}' -o "${dest}" "${url}")" || rc=$?
+              http_code="$(curl -sSL -w '%{http_code}' -o "${dest}" "${url}")" || rc=$?
             fi
 
             if [[ "${rc}" -eq 0 && "${http_code}" =~ ^2[0-9][0-9]$ ]]; then
